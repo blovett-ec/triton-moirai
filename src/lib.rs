@@ -429,7 +429,8 @@ pub const DEFAULT_TIMEOUT_SERVER: u32 = 120000;
 /// Configuration for HAProxy timeouts
 ///
 /// All timeout values are in milliseconds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
 pub struct TimeoutConfig {
     pub queue: u32,
     pub connect: u32,
@@ -567,8 +568,8 @@ pub fn is_loadbalancer_enabled(input: &str) -> bool {
 
 /// Parse timeout overrides from metadata
 ///
-/// Parses a JSON-like string containing timeout overrides. Any timeout not specified
-/// will use the default value.
+/// Parses a JSON5 string containing timeout overrides. Any timeout not specified
+/// will use the default value. JSON5 allows unquoted keys and trailing commas.
 ///
 /// # Format
 ///
@@ -598,61 +599,17 @@ pub fn parse_timeouts(input: &str) -> TimeoutConfig {
         return TimeoutConfig::default();
     }
 
-    // Remove the curly braces if present
-    let content = trimmed.trim_start_matches('{').trim_end_matches('}');
-    if content.is_empty() {
-        return TimeoutConfig::default();
-    }
+    // Wrap in braces if not already present (for convenience)
+    let json5_input = if trimmed.starts_with('{') {
+        trimmed.to_string()
+    } else {
+        format!("{{{}}}", trimmed)
+    };
 
-    let mut config = TimeoutConfig::default();
-
-    // Split by comma and parse each key:value pair
-    for pair in content.split(',') {
-        let parts: Vec<&str> = pair.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            warn!("Invalid timeout parameter format: {}", pair);
-            continue;
-        }
-
-        let key = parts[0].trim();
-        let value = parts[1].trim();
-
-        match key {
-            "queue" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    config.queue = v;
-                } else {
-                    warn!("Invalid queue timeout value: {}", value);
-                }
-            }
-            "connect" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    config.connect = v;
-                } else {
-                    warn!("Invalid connect timeout value: {}", value);
-                }
-            }
-            "client" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    config.client = v;
-                } else {
-                    warn!("Invalid client timeout value: {}", value);
-                }
-            }
-            "server" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    config.server = v;
-                } else {
-                    warn!("Invalid server timeout value: {}", value);
-                }
-            }
-            _ => {
-                warn!("Unknown timeout parameter: {}", key);
-            }
-        }
-    }
-
-    config
+    json5::from_str(&json5_input).unwrap_or_else(|e| {
+        warn!("Failed to parse timeout config: {}", e);
+        TimeoutConfig::default()
+    })
 }
 
 /// Parse the syslog endpoint from metadata
@@ -2072,10 +2029,12 @@ backend be0
 
     #[test]
     fn test_parse_timeouts_invalid_values() {
-        // Invalid values should be ignored and default used
+        // Invalid values cause entire parse to fail, returning defaults
         let config = parse_timeouts("{queue:abc,connect:5000}");
-        assert_eq!(config.queue, DEFAULT_TIMEOUT_QUEUE); // default because invalid
-        assert_eq!(config.connect, 5000);
+        assert_eq!(config.queue, DEFAULT_TIMEOUT_QUEUE);
+        assert_eq!(config.connect, DEFAULT_TIMEOUT_CONNECT);
+        assert_eq!(config.client, DEFAULT_TIMEOUT_CLIENT);
+        assert_eq!(config.server, DEFAULT_TIMEOUT_SERVER);
     }
 
     #[test]
